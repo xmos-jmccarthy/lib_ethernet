@@ -6,29 +6,7 @@
 #include <xs1.h>
 #include "smi.h"
 #include "print.h"
-
-
-
-// SMI Registers
-#define BASIC_CONTROL_REG                  0
-#define BASIC_STATUS_REG                   1
-#define PHY_ID1_REG                        2
-#define PHY_ID2_REG                        3
-#define AUTONEG_ADVERT_REG                 4
-#define AUTONEG_LINK_REG                   5
-#define AUTONEG_EXP_REG                    6
-
-#define BASIC_CONTROL_LOOPBACK_BIT        14
-#define BASIC_CONTROL_100_MBPS_BIT        13
-#define BASIC_CONTROL_AUTONEG_EN_BIT      12
-#define BASIC_CONTROL_RESTART_AUTONEG_BIT  9
-#define BASIC_CONTROL_FULL_DUPLEX_BIT      8
-
-#define BASIC_STATUS_LINK_BIT              2
-
-#define AUTONEG_ADVERT_100_BIT             8
-#define AUTONEG_ADVERT_10_BIT              6
-
+#include "xassert.h"
 
 // Clock is 4 times this rate.
 #define SMI_CLOCK_DIVIDER   (100 / 10)
@@ -215,28 +193,37 @@ unsigned smi_get_id(client smi_if smi) {
   return ((hi >> 10) << 16) | lo;
 }
 
-void smi_configure(client smi_if smi, int is_eth_100, int is_auto)
+void smi_configure(client smi_if smi, int speed_mbps, int enable_auto_neg)
 {
-  if (is_auto) {
-    int auto_neg_advert_reg;
-    auto_neg_advert_reg = smi.read_reg(AUTONEG_ADVERT_REG);
+  if (speed_mbps != 10 && speed_mbps != 100 && speed_mbps != 1000) {
+    fail("Invalid Ethernet speed provided, must be 10, 100 or 1000");
+  }
+
+  if (enable_auto_neg) {
+    uint16_t auto_neg_advert_100_reg = smi.read_reg(AUTONEG_ADVERT_REG);
+    uint16_t gige_control_reg = smi.read_reg(GIGE_CONTROL_REG);
 
     // Clear bits [9:5]
-    auto_neg_advert_reg &= 0xfc1f;
+    auto_neg_advert_100_reg &= 0xfc1f;
+    // Clear bits [9:8]
+    gige_control_reg &= 0xfcff;
 
-    // Set 100 or 10 Mpbs bits
-    if (is_eth_100) {
-      auto_neg_advert_reg |= 1 << AUTONEG_ADVERT_100_BIT;
-    } else {
-      auto_neg_advert_reg |= 1 << AUTONEG_ADVERT_10_BIT;
+    switch (speed_mbps) {
+    #pragma fallthrough
+      case 1000: gige_control_reg |= 1 << AUTONEG_ADVERT_1000BASE_T_FULL_DUPLEX;
+    #pragma fallthrough
+      case 100: auto_neg_advert_100_reg |= 1 << AUTONEG_ADVERT_100BASE_TX_FULL_DUPLEX;
+      case 10: auto_neg_advert_100_reg |= 1 << AUTONEG_ADVERT_10BASE_TX_FULL_DUPLEX; break;
+      default: __builtin_unreachable(); break;
     }
 
     // Write back
-    smi.write_reg(AUTONEG_ADVERT_REG, auto_neg_advert_reg);
+    smi.write_reg(AUTONEG_ADVERT_REG, auto_neg_advert_100_reg);
+    smi.write_reg(GIGE_CONTROL_REG, gige_control_reg);
   }
 
-  int basic_control = smi.read_reg(BASIC_CONTROL_REG);
-  if (is_auto) {
+  uint16_t basic_control = smi.read_reg(BASIC_CONTROL_REG);
+  if (enable_auto_neg) {
     // set autoneg bit
     basic_control |= 1 << BASIC_CONTROL_AUTONEG_EN_BIT;
     smi.write_reg(BASIC_CONTROL_REG, basic_control);
@@ -244,12 +231,16 @@ void smi_configure(client smi_if smi, int is_eth_100, int is_auto)
     basic_control |= 1 << BASIC_CONTROL_RESTART_AUTONEG_BIT;
   }
   else {
-    // set duplex mode, clear autoneg and 100 Mbps.
+    // set duplex mode, clear autoneg and speed
     basic_control |= 1 << BASIC_CONTROL_FULL_DUPLEX_BIT;
     basic_control &= ~( (1 << BASIC_CONTROL_AUTONEG_EN_BIT)|
-                       (1 << BASIC_CONTROL_100_MBPS_BIT));
-    if (is_eth_100) {                // Optionally set 100 Mbps
+                          (1 << BASIC_CONTROL_100_MBPS_BIT)|
+                         (1 << BASIC_CONTROL_1000_MBPS_BIT));
+
+    if (speed_mbps == 100) {
       basic_control |= 1 << BASIC_CONTROL_100_MBPS_BIT;
+    } else if (speed_mbps == 1000) {
+      fail("Autonegotiation cannot be disabled in 1000 Mbps mode");
     }
   }
   smi.write_reg(BASIC_CONTROL_REG, basic_control);
@@ -257,7 +248,7 @@ void smi_configure(client smi_if smi, int is_eth_100, int is_auto)
 
 void smi_set_loopback_mode(client smi_if smi, int enable)
 {
-  int control_reg = smi.read_reg(BASIC_CONTROL_REG);
+  uint16_t control_reg = smi.read_reg(BASIC_CONTROL_REG);
 
   // First clear both autoneg and loopback
   control_reg = control_reg & ~ ((1 << BASIC_CONTROL_AUTONEG_EN_BIT) |
