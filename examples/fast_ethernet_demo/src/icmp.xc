@@ -255,6 +255,10 @@ void icmp_server(client ethernet_cfg_if cfg,
   memcpy(macaddr_filter.addr, mac_address, sizeof(mac_address));
   cfg.add_macaddr_filter(index, 0, macaddr_filter);
 
+  // Add broadcast filter
+  memset(macaddr_filter.addr, 0xff, 6);
+  cfg.add_macaddr_filter(index, 0, macaddr_filter);
+
   // Only allow ARP and IP packets to the app
   cfg.add_ethertype_filter(index, 0x0806);
   cfg.add_ethertype_filter(index, 0x0800);
